@@ -224,7 +224,6 @@ def process_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp, v_gmn, v
 
     meas_v_applied = np.interp(meas_gray, x_cont, v_pos_full_init)
     
-    # 黒浮きを考慮したTarget Luminanceの生成
     target_lum_cp = min_lum + ((X_POINTS / 255.0) ** target_gamma) * (max_lum - min_lum)
     target_lum_cont = min_lum + ((x_cont / 255.0) ** target_gamma) * (max_lum - min_lum)
 
@@ -243,7 +242,6 @@ def process_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp, v_gmn, v
     lum_adjusted = np.interp(v_pos_full_adj, meas_v_applied[sort_v_idx], meas_lum[sort_v_idx])
     lum_meas_continuous = np.interp(v_pos_full_init, meas_v_applied[sort_v_idx], meas_lum[sort_v_idx])
 
-    # 黒浮きを考慮したGamma値の逆算関数
     def calc_gamma(lum_array):
         gamma_res = np.zeros_like(lum_array)
         valid = (x_cont > 0) & (x_cont < 255) & (lum_array > min_lum)
@@ -633,117 +631,119 @@ if meas_datasets:
     # ==========================================
     st.header("LCD Gamma Output Parameters & Data")
     
-    tabs = st.tabs([d["name"] for d in dataset_results])
+    calc_source_name = st.selectbox(
+        "🧮 Select Source CSV for Calculation & Output",
+        options=[d["name"] for d in dataset_results],
+        index=0
+    )
     
-    for idx, tab in enumerate(tabs):
-        d_res = dataset_results[idx]
-        res = d_res["res"]
+    d_res = next(d for d in dataset_results if d["name"] == calc_source_name)
+    res = d_res["res"]
+    
+    col_reg1, col_reg2 = st.columns([2, 1])
+    with col_reg1:
+        st.subheader("Analog Gamma Registers (0xC7)")
+        st.caption("Calculated hardware physical gamma voltages based on input register values.")
         
-        with tab:
-            col_reg1, col_reg2 = st.columns([2, 1])
-            with col_reg1:
-                st.subheader("Analog Gamma Registers (0xC7)")
-                st.caption("Calculated hardware physical gamma voltages based on input register values.")
-                
-                col_pos, col_neg = st.columns(2)
+        col_pos, col_neg = st.columns(2)
 
-                td7875_pos = []
-                td7875_neg = []
-                for i in range(len(res['cp_x'])):
-                    td7875_pos.append({
-                        "Node": f"V{int(res['cp_x'][i])}P",
-                        "Reg Name": f"VGMP{i}",
-                        "Value": f"0x{res['init_dac'][i]:02X} ({res['init_dac'][i]})",
-                        "Voltage": f"{res['v_pos_init_cp'][i]:.3f} V"
-                    })
-                    td7875_neg.append({
-                        "Node": f"V{int(res['cp_x'][i])}N",
-                        "Reg Name": f"VGMN{i}",
-                        "Value": f"0x{res['init_dac'][i]:02X} ({res['init_dac'][i]})",
-                        "Voltage": f"{res['v_neg_init_cp'][i]:.3f} V"
-                    })
-
-                with col_pos:
-                    st.markdown("**🔴 Positive**")
-                    st.dataframe(pd.DataFrame(td7875_pos), height=680, hide_index=True, width="stretch")
-
-                with col_neg:
-                    st.markdown("**🔵 Negative**")
-                    st.dataframe(pd.DataFrame(td7875_neg), height=680, hide_index=True, width="stretch")
-                
-            with col_reg2:
-                st.subheader("Reference Voltages")
-                st.info(f"**VGMPHO:** {v_gmp_reg_val} V \n\n **VGMNHO:** {v_gmn_reg_val} V \n\n **VGS_S:** {v_gss_reg_val} V")
-
-            st.markdown("---")
-            st.subheader("Detailed Measurement Data")
-
-            def safe_stat(arr, func):
-                valid_arr = np.array(arr, dtype=float)
-                valid_arr = valid_arr[~np.isnan(valid_arr) & ~np.isinf(valid_arr)]
-                return func(valid_arr) if len(valid_arr) > 0 else np.nan
-
-            def fmt(val, is_delta=False):
-                if pd.isna(val): return "-"
-                return f"{val:+.4f}" if is_delta else f"{val:.4f}"
-
-            meas_lum_array = d_res["meas_lum"]
-            meas_gam_array = d_res["calc_gamma"]
-            tgt_gam_array = res["gam_tgt"]
-            delta_gam_array = meas_gam_array - target_gamma_input
-
-            summary_df = pd.DataFrame({
-                "Metric": ["Measurement Luminance", "Measurement Gamma", "Target Gamma", "Gamma Δ (Meas - Target)"],
-                "Min": [
-                    fmt(safe_stat(meas_lum_array, np.min)), 
-                    fmt(safe_stat(meas_gam_array, np.min)), 
-                    fmt(safe_stat(tgt_gam_array, np.min)),
-                    fmt(safe_stat(delta_gam_array, np.min), is_delta=True)
-                ],
-                "Max": [
-                    fmt(safe_stat(meas_lum_array, np.max)), 
-                    fmt(safe_stat(meas_gam_array, np.max)), 
-                    fmt(safe_stat(tgt_gam_array, np.max)),
-                    fmt(safe_stat(delta_gam_array, np.max), is_delta=True)
-                ],
-                "Average": [
-                    fmt(safe_stat(meas_lum_array, np.mean)), 
-                    fmt(safe_stat(meas_gam_array, np.mean)), 
-                    fmt(safe_stat(tgt_gam_array, np.mean)),
-                    fmt(safe_stat(delta_gam_array, np.mean), is_delta=True)
-                ]
+        td7875_pos = []
+        td7875_neg = []
+        for i in range(len(res['cp_x'])):
+            td7875_pos.append({
+                "Node": f"V{int(res['cp_x'][i])}P",
+                "Reg Name": f"VGMP{i}",
+                "Value": f"0x{res['init_dac'][i]:02X} ({res['init_dac'][i]})",
+                "Voltage": f"{res['v_pos_init_cp'][i]:.3f} V"
             })
-            
-            st.markdown(f"**Source Data (CSV):** `{d_res['name']}`")
-            st.markdown("**Summary Statistics**")
-            st.dataframe(summary_df, hide_index=True, width="stretch")
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            detailed_df = pd.DataFrame({
-                "Gray": d_res["meas_gray"], "x": d_res["meas_x"], "y": d_res["meas_y"], "L (nits)": d_res["meas_lum"],
-                "u'": d_res["u_prime"], "v'": d_res["v_prime"], "Gamma": d_res["calc_gamma"], 
-                "L diff": d_res["l_diff"], "Li (Rel Diff)": d_res["l_diff_rel"],
-                "CCT (K)": d_res["cct"], "ΔCCT": d_res["delta_cct"], "Δu'v' (Δduv)": d_res["delta_uv"]
+            td7875_neg.append({
+                "Node": f"V{int(res['cp_x'][i])}N",
+                "Reg Name": f"VGMN{i}",
+                "Value": f"0x{res['init_dac'][i]:02X} ({res['init_dac'][i]})",
+                "Voltage": f"{res['v_neg_init_cp'][i]:.3f} V"
             })
 
-            def style_df(row):
-                styles = [''] * len(row)
-                try:
-                    ldiff_idx = row.index.get_loc("L diff")
-                    li_idx = row.index.get_loc("Li (Rel Diff)")
-                    if pd.notna(row["L diff"]) and row["L diff"] < 0:
-                        styles[ldiff_idx] = 'color: red; font-weight: bold;'
-                    li_val = row["Li (Rel Diff)"]
-                    if pd.notna(li_val) and li_val < 0:
-                        styles[li_idx] = 'color: red; font-weight: bold;' 
-                except Exception:
-                    pass
-                return styles
+        with col_pos:
+            st.markdown("**🔴 Positive**")
+            st.dataframe(pd.DataFrame(td7875_pos), height=680, hide_index=True, width="stretch")
 
-            styled_df = detailed_df.style.apply(style_df, axis=1).format({
-                "Gray": "{:.0f}", "x": "{:.4f}", "y": "{:.4f}", "L (nits)": "{:.2f}",
-                "u'": "{:.4f}", "v'": "{:.4f}", "Gamma": "{:.3f}", "L diff": "{:.3f}",
-                "Li (Rel Diff)": "{:.4f}", "CCT (K)": "{:.0f}", "ΔCCT": "{:.0f}", "Δu'v' (Δduv)": "{:.4f}"
-            }, na_rep="-")
+        with col_neg:
+            st.markdown("**🔵 Negative**")
+            st.dataframe(pd.DataFrame(td7875_neg), height=680, hide_index=True, width="stretch")
+        
+    with col_reg2:
+        st.subheader("Reference Voltages")
+        st.info(f"**VGMPHO:** {v_gmp_reg_val} V \n\n **VGMNHO:** {v_gmn_reg_val} V \n\n **VGS_S:** {v_gss_reg_val} V")
 
-            st.dataframe(styled_df, width="stretch", height=500)
+    st.markdown("---")
+    st.subheader("Detailed Measurement Data")
+
+    def safe_stat(arr, func):
+        valid_arr = np.array(arr, dtype=float)
+        valid_arr = valid_arr[~np.isnan(valid_arr) & ~np.isinf(valid_arr)]
+        return func(valid_arr) if len(valid_arr) > 0 else np.nan
+
+    def fmt(val, is_delta=False):
+        if pd.isna(val): return "-"
+        return f"{val:+.4f}" if is_delta else f"{val:.4f}"
+
+    meas_lum_array = d_res["meas_lum"]
+    meas_gam_array = d_res["calc_gamma"]
+    tgt_gam_array = res["gam_tgt"]
+    delta_gam_array = meas_gam_array - target_gamma_input
+
+    summary_df = pd.DataFrame({
+        "Metric": ["Measurement Luminance", "Measurement Gamma", "Target Gamma", "Gamma Δ (Meas - Target)"],
+        "Min": [
+            fmt(safe_stat(meas_lum_array, np.min)), 
+            fmt(safe_stat(meas_gam_array, np.min)), 
+            fmt(safe_stat(tgt_gam_array, np.min)),
+            fmt(safe_stat(delta_gam_array, np.min), is_delta=True)
+        ],
+        "Max": [
+            fmt(safe_stat(meas_lum_array, np.max)), 
+            fmt(safe_stat(meas_gam_array, np.max)), 
+            fmt(safe_stat(tgt_gam_array, np.max)),
+            fmt(safe_stat(delta_gam_array, np.max), is_delta=True)
+        ],
+        "Average": [
+            fmt(safe_stat(meas_lum_array, np.mean)), 
+            fmt(safe_stat(meas_gam_array, np.mean)), 
+            fmt(safe_stat(tgt_gam_array, np.mean)),
+            fmt(safe_stat(delta_gam_array, np.mean), is_delta=True)
+        ]
+    })
+    
+    st.markdown(f"**Source Data (CSV):** `{d_res['name']}`")
+    st.markdown("**Summary Statistics**")
+    st.dataframe(summary_df, hide_index=True, width="stretch")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    detailed_df = pd.DataFrame({
+        "Gray": d_res["meas_gray"], "x": d_res["meas_x"], "y": d_res["meas_y"], "L (nits)": d_res["meas_lum"],
+        "u'": d_res["u_prime"], "v'": d_res["v_prime"], "Gamma": d_res["calc_gamma"], 
+        "L diff": d_res["l_diff"], "Li (Rel Diff)": d_res["l_diff_rel"],
+        "CCT (K)": d_res["cct"], "ΔCCT": d_res["delta_cct"], "Δu'v' (Δduv)": d_res["delta_uv"]
+    })
+
+    def style_df(row):
+        styles = [''] * len(row)
+        try:
+            ldiff_idx = row.index.get_loc("L diff")
+            li_idx = row.index.get_loc("Li (Rel Diff)")
+            if pd.notna(row["L diff"]) and row["L diff"] < 0:
+                styles[ldiff_idx] = 'color: red; font-weight: bold;'
+            li_val = row["Li (Rel Diff)"]
+            if pd.notna(li_val) and li_val < 0:
+                styles[li_idx] = 'color: red; font-weight: bold;' 
+        except Exception:
+            pass
+        return styles
+
+    styled_df = detailed_df.style.apply(style_df, axis=1).format({
+        "Gray": "{:.0f}", "x": "{:.4f}", "y": "{:.4f}", "L (nits)": "{:.2f}",
+        "u'": "{:.4f}", "v'": "{:.4f}", "Gamma": "{:.3f}", "L diff": "{:.3f}",
+        "Li (Rel Diff)": "{:.4f}", "CCT (K)": "{:.0f}", "ΔCCT": "{:.0f}", "Δu'v' (Δduv)": "{:.4f}"
+    }, na_rep="-")
+
+    st.dataframe(styled_df, width="stretch", height=500)
