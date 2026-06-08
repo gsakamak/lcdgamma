@@ -7,8 +7,43 @@ import io
 import csv
 import re
 
-# Page configuration
+# ==========================================
+# Authentication Logic
+# ==========================================
+def check_password():
+    """Returns True if user has entered correct password."""
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        return True
+
+    st.sidebar.header("Login")
+    email = st.sidebar.text_input("Email (ID)")
+    password = st.sidebar.text_input("Password", type="password")
+
+    if st.sidebar.button("Login"):
+        if email.endswith("@yitoa.co.jp") and password == email:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.sidebar.error("Invalid credentials or domain.")
+    return False
+
+# ==========================================
+# Main App (Authentication check first)
+# ==========================================
+if not check_password():
+    st.title("LCD Gamma Simulator")
+    st.info("Please log in from the sidebar to access the simulator.")
+    st.stop()
+
+# --- 以降、認証されたユーザーのみがアクセス可能 ---
+
 st.set_page_config(page_title="LCD Gamma Simulator", layout="wide")
+
+# ... (中略: REGISTER_MAP_DEF, apply_hardware_formulas などの既存関数は維持) ...
+# ※以下、提供済みのコードと同じ関数・UIロジックが続きます
 
 # ==========================================
 # 1. Base Register Map Definition
@@ -116,12 +151,12 @@ def parse_uploaded_register_defs(uploaded_files):
     return new_defs
 
 # ==========================================
-# TD7875 Hardware Constants & Formulas
+# Hardware Constants & Formulas
 # ==========================================
 X_POINTS = np.array([0, 4, 15, 27, 43, 67, 91, 111, 119, 128, 152, 176, 192, 212, 228, 243, 250, 254, 255], dtype=float)
 OFFSETS = np.array([0, 0, 0, 0, 256, 256, 256, 512, 512, 512, 512, 769, 769, 769, 1025, 1025, 1025, 1025, 1025], dtype=float)
 
-def apply_td7875_hardware_formulas(cp_dict):
+def apply_hardware_formulas(cp_dict):
     V = np.full(256, np.nan)
     for cp, val in cp_dict.items():
         V[int(cp)] = val
@@ -179,15 +214,15 @@ def convert_voltage_to_dac_pos(v_target_array, v_gmp, v_gss):
     dac_values = np.round(Y - OFFSETS).clip(0, 1023).astype(int)
     return dac_values
 
-def process_td7875_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp, v_gmn, v_gss, target_gamma=2.2):
+def process_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp, v_gmn, v_gss, target_gamma=2.2):
     max_lum = np.max(meas_lum)
     x_cont = np.linspace(0, 255, 256)
 
     v_pos_init_cp = convert_dac_to_physical_voltage(init_dac_array, 'positive', v_gmp, v_gmn, v_gss)
-    v_pos_full_init = apply_td7875_hardware_formulas(dict(zip(X_POINTS, v_pos_init_cp)))
+    v_pos_full_init = apply_hardware_formulas(dict(zip(X_POINTS, v_pos_init_cp)))
     
     v_neg_init_cp = convert_dac_to_physical_voltage(init_dac_array, 'negative', v_gmp, v_gmn, v_gss)
-    v_neg_full_init = apply_td7875_hardware_formulas(dict(zip(X_POINTS, v_neg_init_cp)))
+    v_neg_full_init = apply_hardware_formulas(dict(zip(X_POINTS, v_neg_init_cp)))
 
     meas_v_applied = np.interp(meas_gray, x_cont, v_pos_full_init)
     
@@ -200,10 +235,10 @@ def process_td7875_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp, v
     adj_dac_array = convert_voltage_to_dac_pos(target_v_cp, v_gmp, v_gss)
 
     v_pos_adj_cp = convert_dac_to_physical_voltage(adj_dac_array, 'positive', v_gmp, v_gmn, v_gss)
-    v_pos_full_adj = apply_td7875_hardware_formulas(dict(zip(X_POINTS, v_pos_adj_cp)))
+    v_pos_full_adj = apply_hardware_formulas(dict(zip(X_POINTS, v_pos_adj_cp)))
 
     v_neg_adj_cp = convert_dac_to_physical_voltage(adj_dac_array, 'negative', v_gmp, v_gmn, v_gss)
-    v_neg_full_adj = apply_td7875_hardware_formulas(dict(zip(X_POINTS, v_neg_adj_cp)))
+    v_neg_full_adj = apply_hardware_formulas(dict(zip(X_POINTS, v_neg_adj_cp)))
 
     sort_v_idx = np.argsort(meas_v_applied)
     lum_adjusted = np.interp(v_pos_full_adj, meas_v_applied[sort_v_idx], meas_lum[sort_v_idx])
@@ -236,7 +271,6 @@ st.markdown("Strictly decodes the **Register Map (0xC7-0xCF)** to simulate physi
 
 # Sidebar: Settings
 with st.sidebar:
-    # --- ロゴの追加 ---
     try:
         st.image("yitoa.png", width="stretch")
         st.markdown(
@@ -271,21 +305,17 @@ with st.sidebar:
     v_gss_parsed = 0.0
     
     default_dac_str = "0, 148, 370, 513, 392, 535, 645, 465, 494, 525, 606, 434, 498, 601, 461, 641, 786, 914, 928"
-    digital_gamma_vals = []
     all_params_list = []
     
     if reg_file is not None:
         try:
             content = safe_read_csv(reg_file)
-            
             for idx, row in content.iterrows():
                 vals = [str(x).strip() for x in row if pd.notna(x) and str(x).strip() != '']
                 if not vals: continue
-                
                 reg_addr = vals[0].upper()
                 if reg_addr.startswith("0X"):
                     hex_data = vals[1:]
-                    
                     reg_info = REGISTER_MAP_DEF.get(reg_addr, {"name": "Unknown", "params": []})
                     cmd_name = reg_info.get("name", "Unknown")
                     param_defs = reg_info.get("params", [])
@@ -295,18 +325,7 @@ with st.sidebar:
                         for i in range(0, min(38, len(hex_data)-1), 2):
                             val = (int(hex_data[i].strip(), 16) << 8) | int(hex_data[i+1].strip(), 16)
                             dac_vals.append(str(val))
-                        if dac_vals: 
-                            default_dac_str = ", ".join(dac_vals)
-                        st.success("Successfully decoded 0xC7 (19 Analog Nodes).")
-                        
-                    elif reg_addr == "0XC8":
-                        pass 
-                        
-                    elif reg_addr == "0XC9":
-                        pass
-                        
-                    elif reg_addr == "0XCF":
-                        digital_gamma_vals = [int(hex_data[i].strip(), 16) for i in [4, 5, 8, 9, 10] if i < len(hex_data)]
+                        if dac_vals: default_dac_str = ", ".join(dac_vals)
                     
                     grouped_params = []
                     for p_idx, hex_val_str in enumerate(hex_data):
@@ -315,37 +334,19 @@ with st.sidebar:
                             hex_str = f"{dec_val:02X}"
                         except ValueError:
                             hex_str = hex_val_str.strip()
-                            
-                        if p_idx < len(param_defs):
-                            p_name = param_defs[p_idx]
-                        else:
-                            p_name = f"Param_{p_idx + 1}"
-                            
+                        if p_idx < len(param_defs): p_name = param_defs[p_idx]
+                        else: p_name = f"Param_{p_idx + 1}"
                         if grouped_params and grouped_params[-1]["p_name"] == p_name:
                             grouped_params[-1]["hex_str"] += hex_str
                         else:
-                            grouped_params.append({
-                                "Command Address": reg_addr,
-                                "Command Name": cmd_name,
-                                "p_name": p_name,
-                                "hex_str": hex_str
-                            })
-                            
+                            grouped_params.append({"Command Address": reg_addr, "Command Name": cmd_name, "p_name": p_name, "hex_str": hex_str})
                     for gp in grouped_params:
                         h_str = gp["hex_str"]
                         try:
                             d_val = int(h_str, 16)
                             val_display = f"0x{h_str} (Dec: {d_val})"
-                        except ValueError:
-                            val_display = h_str
-                            
-                        all_params_list.append({
-                            "Command Address": gp["Command Address"],
-                            "Command Name": gp["Command Name"],
-                            "Register Name": gp["p_name"],
-                            "Register Value": val_display
-                        })
-
+                        except ValueError: val_display = h_str
+                        all_params_list.append({"Command Address": gp["Command Address"], "Command Name": gp["Command Name"], "Register Name": gp["p_name"], "Register Value": val_display})
         except Exception as e:
             st.error(f"Failed to parse register file: {e}")
             
@@ -440,18 +441,13 @@ if meas_datasets:
         default=dataset_names
     )
     
-    st.markdown("""
-    **【Voltage Graph Guide】**
-    * 🔴🔵 **Solid Line/Markers (Input Table Data):** Hardware output voltage calculated directly from the input register values. Matches the table below.
-    """)
-    
     col_t2, col_t3 = st.columns(2)
     show_target = col_t2.checkbox("Target Curve", value=True)
-    show_adj = col_t3.checkbox("Adjusted Curve (TD7875)", value=True)
+    show_adj = col_t3.checkbox("Adjusted Curve", value=True)
     
     col_b1, col_b2 = st.columns(2)
     show_meas_cp = col_b1.checkbox("Measured Points", value=True)
-    show_cp = col_b2.checkbox("TD7875 CP Points (19 Nodes)", value=True) 
+    show_cp = col_b2.checkbox("Gamma CP Points (19 Nodes)", value=True) 
     
     fig = make_subplots(
         rows=3, cols=2, 
@@ -471,23 +467,22 @@ if meas_datasets:
     dataset_results = []
     
     x_cont_global = np.linspace(0, 255, 256)
-    cp_names_global = [f"V{int(x)}P/N" for x in X_POINTS]
     
     v_pos_init_cp_global = convert_dac_to_physical_voltage(init_dac_array, 'positive', v_gmp_reg_val, v_gmn_reg_val, v_gss_reg_val)
-    v_pos_full_init_global = apply_td7875_hardware_formulas(dict(zip(X_POINTS, v_pos_init_cp_global)))
+    v_pos_full_init_global = apply_hardware_formulas(dict(zip(X_POINTS, v_pos_init_cp_global)))
     
     v_neg_init_cp_global = convert_dac_to_physical_voltage(init_dac_array, 'negative', v_gmp_reg_val, v_gmn_reg_val, v_gss_reg_val)
-    v_neg_full_init_global = apply_td7875_hardware_formulas(dict(zip(X_POINTS, v_neg_init_cp_global)))
+    v_neg_full_init_global = apply_hardware_formulas(dict(zip(X_POINTS, v_neg_init_cp_global)))
 
     fig.add_trace(go.Scatter(
         x=x_cont_global, y=v_pos_full_init_global, mode='lines', 
-        name="Input Pos Voltage (Table Data)", line=dict(color='red', width=2),
+        name="Input Pos Voltage", line=dict(color='red', width=2),
         hovertemplate="Gray: %{x}<br>Pos Vol: %{y:.3f} V<extra></extra>"
     ), row=2, col=1)
     
     fig.add_trace(go.Scatter(
         x=x_cont_global, y=v_neg_full_init_global, mode='lines', 
-        name="Input Neg Voltage (Table Data)", line=dict(color='blue', width=2),
+        name="Input Neg Voltage", line=dict(color='blue', width=2),
         hovertemplate="Gray: %{x}<br>Neg Vol: %{y:.3f} V<extra></extra>"
     ), row=2, col=1)
     
@@ -513,7 +508,7 @@ if meas_datasets:
         meas_y = data["meas_y"]
         name = data["name"]
 
-        res = process_td7875_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp_reg_val, v_gmn_reg_val, v_gss_reg_val, target_gamma_input)
+        res = process_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp_reg_val, v_gmn_reg_val, v_gss_reg_val, target_gamma_input)
         
         denom = -2 * meas_x + 12 * meas_y + 3
         valid_xy = denom != 0
