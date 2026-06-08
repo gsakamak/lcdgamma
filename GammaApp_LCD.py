@@ -42,9 +42,6 @@ if not check_password():
 
 st.set_page_config(page_title="LCD Gamma Simulator", layout="wide")
 
-# ... (中略: REGISTER_MAP_DEF, apply_hardware_formulas などの既存関数は維持) ...
-# ※以下、提供済みのコードと同じ関数・UIロジックが続きます
-
 # ==========================================
 # 1. Base Register Map Definition
 # ==========================================
@@ -216,6 +213,7 @@ def convert_voltage_to_dac_pos(v_target_array, v_gmp, v_gss):
 
 def process_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp, v_gmn, v_gss, target_gamma=2.2):
     max_lum = np.max(meas_lum)
+    min_lum = np.min(meas_lum)
     x_cont = np.linspace(0, 255, 256)
 
     v_pos_init_cp = convert_dac_to_physical_voltage(init_dac_array, 'positive', v_gmp, v_gmn, v_gss)
@@ -226,8 +224,9 @@ def process_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp, v_gmn, v
 
     meas_v_applied = np.interp(meas_gray, x_cont, v_pos_full_init)
     
-    target_lum_cp = ((X_POINTS / 255.0) ** target_gamma) * max_lum
-    target_lum_cont = ((x_cont / 255.0) ** target_gamma) * max_lum
+    # 黒浮きを考慮したTarget Luminanceの生成
+    target_lum_cp = min_lum + ((X_POINTS / 255.0) ** target_gamma) * (max_lum - min_lum)
+    target_lum_cont = min_lum + ((x_cont / 255.0) ** target_gamma) * (max_lum - min_lum)
 
     sort_lum_idx = np.argsort(meas_lum)
     target_v_cp = np.interp(target_lum_cp, meas_lum[sort_lum_idx], meas_v_applied[sort_lum_idx])
@@ -244,9 +243,14 @@ def process_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp, v_gmn, v
     lum_adjusted = np.interp(v_pos_full_adj, meas_v_applied[sort_v_idx], meas_lum[sort_v_idx])
     lum_meas_continuous = np.interp(v_pos_full_init, meas_v_applied[sort_v_idx], meas_lum[sort_v_idx])
 
+    # 黒浮きを考慮したGamma値の逆算関数
     def calc_gamma(lum_array):
+        gamma_res = np.zeros_like(lum_array)
+        valid = (x_cont > 0) & (x_cont < 255) & (lum_array > min_lum)
         with np.errstate(divide='ignore', invalid='ignore'):
-            return np.log(lum_array / max_lum) / np.log(x_cont / 255.0)
+            gamma_res[valid] = np.log((lum_array[valid] - min_lum) / (max_lum - min_lum)) / np.log(x_cont[valid] / 255.0)
+        gamma_res[~valid] = np.nan
+        return gamma_res
 
     return {
         "max_lum": max_lum, "x_cont": x_cont, "cp_x": X_POINTS,
@@ -467,6 +471,7 @@ if meas_datasets:
     dataset_results = []
     
     x_cont_global = np.linspace(0, 255, 256)
+    cp_names_global = [f"V{int(x)}P/N" for x in X_POINTS]
     
     v_pos_init_cp_global = convert_dac_to_physical_voltage(init_dac_array, 'positive', v_gmp_reg_val, v_gmn_reg_val, v_gss_reg_val)
     v_pos_full_init_global = apply_hardware_formulas(dict(zip(X_POINTS, v_pos_init_cp_global)))
@@ -529,12 +534,13 @@ if meas_datasets:
         delta_uv = np.sqrt((u_prime - u_ref)**2 + (v_prime - v_ref)**2)
 
         l_max = np.max(meas_lum)
+        l_min = np.min(meas_lum)
         gray_norm = meas_gray / 255.0
         calc_gamma = np.zeros_like(meas_gray, dtype=float)
-        valid_lum = (meas_gray > 0) & (meas_gray < 255) & (meas_lum > 0)
+        valid_lum = (meas_gray > 0) & (meas_gray < 255) & (meas_lum > l_min)
         
         with np.errstate(divide='ignore', invalid='ignore'):
-            calc_gamma[valid_lum] = np.log(meas_lum[valid_lum] / l_max) / np.log(gray_norm[valid_lum])
+            calc_gamma[valid_lum] = np.log((meas_lum[valid_lum] - l_min) / (l_max - l_min)) / np.log(gray_norm[valid_lum])
         calc_gamma[~valid_lum] = np.nan
         
         sort_asc = np.argsort(meas_gray)
@@ -564,7 +570,6 @@ if meas_datasets:
             scale_div = res['max_lum'] if is_normalized else 1.0
             color = PLOT_COLORS[idx % len(PLOT_COLORS)]
             
-            # Row 1 Col 1
             if show_target:
                 fig.add_trace(go.Scatter(x=res['x_cont'], y=res['lum_tgt']/scale_div, name=f"Target ({name})", line=dict(color=color, width=2)), row=1, col=1)
             if show_adj:
@@ -577,7 +582,6 @@ if meas_datasets:
                 hover_text = [f"[{name}] VGMP{i}/VGMN{i}<br>Gray: {int(res['cp_x'][i])}<br>After: 0x{res['adj_dac'][i]:02X}" for i in range(len(res['cp_x']))]
                 fig.add_trace(go.Scatter(x=res['cp_x'], y=np.interp(res['cp_x'], res['x_cont'], res['lum_adj']) / scale_div, mode='markers', name=f"CP ({name})", marker=dict(color=color, size=7, symbol='diamond'), text=hover_text, hovertemplate="%{text}<br>Lum: %{y:.4f}<extra></extra>"), row=1, col=1)
 
-            # Row 1 Col 2
             if show_target:
                 fig.add_trace(go.Scatter(x=res['x_cont'], y=res['gam_tgt'], name=f"Target Gamma ({name})", line=dict(color=color, width=2), showlegend=False), row=1, col=2)
             if show_adj:
@@ -589,7 +593,6 @@ if meas_datasets:
             if show_cp:
                 fig.add_trace(go.Scatter(x=res['cp_x'], y=np.interp(res['cp_x'], res['x_cont'], res['gam_adj']), mode='markers', name=f"CP Gamma ({name})", marker=dict(color=color, size=7, symbol='diamond'), text=hover_text, hovertemplate="%{text}<br>Gamma: %{y:.3f}<extra></extra>", showlegend=False), row=1, col=2)
 
-            # Row 2 Col 2: Li
             li_tgt = np.zeros(256)
             li_adj = np.zeros(256)
             with np.errstate(divide='ignore', invalid='ignore'):
@@ -603,7 +606,6 @@ if meas_datasets:
             if show_adj:
                 fig.add_trace(go.Scatter(x=res['x_cont'], y=li_adj, name=f"Adj Li ({name})", line=dict(dash='dot', color=color, width=2), showlegend=False), row=2, col=2)
 
-            # Row 3: uv, CCT
             fig.add_trace(go.Scatter(x=meas_gray, y=delta_uv, mode='lines+markers', name=f"Δduv ({name})", line=dict(color=color, width=2), marker=dict(size=4)), row=3, col=1)
             fig.add_trace(go.Scatter(x=meas_gray, y=delta_cct, mode='lines+markers', name=f"ΔCCT ({name})", line=dict(color=color, width=2), marker=dict(size=4)), row=3, col=2)
 
