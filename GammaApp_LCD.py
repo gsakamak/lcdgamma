@@ -471,7 +471,6 @@ if meas_datasets:
     dataset_results = []
     
     x_cont_global = np.linspace(0, 255, 256)
-    cp_names_global = [f"V{int(x)}P/N" for x in X_POINTS]
     
     v_pos_init_cp_global = convert_dac_to_physical_voltage(init_dac_array, 'positive', v_gmp_reg_val, v_gmn_reg_val, v_gss_reg_val)
     v_pos_full_init_global = apply_hardware_formulas(dict(zip(X_POINTS, v_pos_init_cp_global)))
@@ -678,6 +677,47 @@ if meas_datasets:
 
             st.markdown("---")
             st.subheader("Detailed Measurement Data")
+
+            def safe_stat(arr, func):
+                valid_arr = np.array(arr, dtype=float)
+                valid_arr = valid_arr[~np.isnan(valid_arr) & ~np.isinf(valid_arr)]
+                return func(valid_arr) if len(valid_arr) > 0 else np.nan
+
+            def fmt(val, is_delta=False):
+                if pd.isna(val): return "-"
+                return f"{val:+.4f}" if is_delta else f"{val:.4f}"
+
+            meas_lum_array = d_res["meas_lum"]
+            meas_gam_array = d_res["calc_gamma"]
+            tgt_gam_array = res["gam_tgt"]
+            delta_gam_array = meas_gam_array - target_gamma_input
+
+            summary_df = pd.DataFrame({
+                "Metric": ["Measurement Luminance", "Measurement Gamma", "Target Gamma", "Gamma Δ (Meas - Target)"],
+                "Min": [
+                    fmt(safe_stat(meas_lum_array, np.min)), 
+                    fmt(safe_stat(meas_gam_array, np.min)), 
+                    fmt(safe_stat(tgt_gam_array, np.min)),
+                    fmt(safe_stat(delta_gam_array, np.min), is_delta=True)
+                ],
+                "Max": [
+                    fmt(safe_stat(meas_lum_array, np.max)), 
+                    fmt(safe_stat(meas_gam_array, np.max)), 
+                    fmt(safe_stat(tgt_gam_array, np.max)),
+                    fmt(safe_stat(delta_gam_array, np.max), is_delta=True)
+                ],
+                "Average": [
+                    fmt(safe_stat(meas_lum_array, np.mean)), 
+                    fmt(safe_stat(meas_gam_array, np.mean)), 
+                    fmt(safe_stat(tgt_gam_array, np.mean)),
+                    fmt(safe_stat(delta_gam_array, np.mean), is_delta=True)
+                ]
+            })
+            
+            st.markdown(f"**Source Data (CSV):** `{d_res['name']}`")
+            st.markdown("**Summary Statistics**")
+            st.dataframe(summary_df, hide_index=True, width="stretch")
+            st.markdown("<br>", unsafe_allow_html=True)
 
             detailed_df = pd.DataFrame({
                 "Gray": d_res["meas_gray"], "x": d_res["meas_x"], "y": d_res["meas_y"], "L (nits)": d_res["meas_lum"],
