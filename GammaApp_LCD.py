@@ -109,11 +109,8 @@ def parse_uploaded_register_defs(uploaded_files):
                 if cmd_name_col != -1 and cmd_param_col != -1 and hex_col != -1 and d_cols:
                     break
             
-            # --- 追加したフォールバック処理 ---
-            # HEXやADDRESSというヘッダー名が無い場合、D0の隣の列をアドレス列とみなす
             if hex_col == -1 and d_cols:
                 hex_col = max(d_cols) + 1
-            # ---------------------------------
                     
             if cmd_name_col != -1 and cmd_param_col != -1 and hex_col != -1:
                 current_cmd = None
@@ -230,7 +227,6 @@ def process_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp, v_gmn, v
 
     meas_v_applied = np.interp(meas_gray, x_cont, v_pos_full_init)
     
-    # 黒浮きを考慮したTarget Luminanceの生成
     target_lum_cp = min_lum + ((X_POINTS / 255.0) ** target_gamma) * (max_lum - min_lum)
     target_lum_cont = min_lum + ((x_cont / 255.0) ** target_gamma) * (max_lum - min_lum)
 
@@ -249,7 +245,6 @@ def process_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp, v_gmn, v
     lum_adjusted = np.interp(v_pos_full_adj, meas_v_applied[sort_v_idx], meas_lum[sort_v_idx])
     lum_meas_continuous = np.interp(v_pos_full_init, meas_v_applied[sort_v_idx], meas_lum[sort_v_idx])
 
-    # 黒浮きを考慮したGamma値の逆算関数
     def calc_gamma(lum_array):
         gamma_res = np.zeros_like(lum_array)
         valid = (x_cont > 0) & (x_cont < 255) & (lum_array > min_lum)
@@ -278,6 +273,8 @@ def process_physical_tuning(meas_gray, meas_lum, init_dac_array, v_gmp, v_gmn, v
 # ==========================================
 st.title("LCD Gamma Simulator")
 st.markdown("Strictly decodes the **Register Map (0xC7-0xCF)** to simulate physical voltages and digital tuning parameters.")
+
+original_reg_content = None
 
 # Sidebar: Settings
 with st.sidebar:
@@ -320,6 +317,7 @@ with st.sidebar:
     if reg_file is not None:
         try:
             content = safe_read_csv(reg_file)
+            original_reg_content = content.copy()
             for idx, row in content.iterrows():
                 vals = [str(x).strip() for x in row if pd.notna(x) and str(x).strip() != '']
                 if not vals: continue
@@ -755,3 +753,73 @@ if meas_datasets:
     }, na_rep="-")
 
     st.dataframe(styled_df, width="stretch", height=500)
+
+    # ==========================================
+    # Register Before/After & CSV Export
+    # ==========================================
+    st.markdown("---")
+    st.subheader("Gamma Optimization: Register Before / After (0xC7)")
+    
+    comparison_data = []
+    for i in range(len(res['cp_x'])):
+        node_name = f"V{int(res['cp_x'][i])}P/N"
+        b_val = res['init_dac'][i]
+        a_val = res['adj_dac'][i]
+        delta = a_val - b_val
+        comparison_data.append({
+            "Node": node_name,
+            "Reg Name": f"VGMP{i} / VGMN{i}",
+            "Before (Dec)": b_val,
+            "After (Dec)": a_val,
+            "Before (Hex)": f"0x{b_val:03X}",
+            "After (Hex)": f"0x{a_val:03X}",
+            "Delta": f"{delta:+d}"
+        })
+    comp_df = pd.DataFrame(comparison_data)
+
+    def style_delta2(row):
+        styles = [''] * len(row)
+        try:
+            delta_idx = row.index.get_loc("Delta")
+            val = int(row["Delta"])
+            if val > 0: styles[delta_idx] = 'color: red; font-weight: bold;'
+            elif val < 0: styles[delta_idx] = 'color: blue; font-weight: bold;'
+        except:
+            pass
+        return styles
+
+    st.dataframe(comp_df.style.apply(style_delta2, axis=1), width="stretch", hide_index=True)
+
+    if 'original_reg_content' in globals() and original_reg_content is not None:
+        out_df = original_reg_content.copy()
+        adj_dac = res['adj_dac']
+        hex_list = []
+        for val in adj_dac:
+            hex_list.append(f"0x{(val >> 8) & 0xFF:02X}")
+            hex_list.append(f"0x{val & 0xFF:02X}")
+            
+        for r_idx, row in out_df.iterrows():
+            vals = [str(x).strip() for x in row if pd.notna(x) and str(x).strip() != '']
+            if not vals: continue
+            reg_addr = vals[0].upper()
+            if reg_addr == "0XC7":
+                col_idx = 0
+                for c in range(len(row)):
+                    cell_val = row.iloc[c]
+                    if pd.notna(cell_val) and str(cell_val).strip() != '':
+                        if col_idx > 0 and col_idx <= 38:
+                            out_df.iloc[r_idx, c] = hex_list[col_idx - 1]
+                        col_idx += 1
+                        
+        csv_buffer = io.StringIO()
+        out_df.to_csv(csv_buffer, index=False, header=False)
+        csv_data = csv_buffer.getvalue().encode('utf-8-sig')
+
+        st.download_button(
+            label="📥 Download Adjusted Register CSV",
+            data=csv_data,
+            file_name=f"adjusted_gamma_reg_{d_res['name']}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("Upload a Register Map CSV (gamma_reg.csv) in the sidebar to enable downloading the adjusted file.")
